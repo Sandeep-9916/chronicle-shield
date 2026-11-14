@@ -53,6 +53,9 @@ export interface ForensicEvent {
   quote: string;
   status: "verified" | "needs_review";
   verification_notes?: string;
+  verification_source?: "machine_verified" | "human_approved" | "user_edited";
+  original_event_data?: any;
+  user_reviewed?: boolean;
   created_at: string;
 }
 
@@ -62,6 +65,60 @@ export interface ExtractionStatus {
   progress: string;
   total: number;
   error?: string | null;
+}
+
+export interface CaseSummary {
+  id: string;
+  case_id: string;
+  version: number;
+  status: "active" | "outdated";
+  summary_text: string;
+  citations: string[];
+  removed_sentences: Array<{ sentence: string; reason: string }>;
+  summary_metadata?: {
+    generated_at?: string;
+    verified_events_count?: number;
+    machine_verified_count?: number;
+    human_approved_count?: number;
+    user_edited_count?: number;
+    total_sentences?: number;
+    removed_count?: number;
+  };
+  created_at: string;
+}
+
+export interface MergedEvents {
+  case_id: string;
+  total_events: number;
+  grouped_by_day: Record<string, Record<string, ForensicEvent[]>>;
+  undated: Record<string, ForensicEvent[]>;
+}
+
+export interface PipelineStatus {
+  case_id: string;
+  status: "idle" | "in_progress" | "completed" | "failed";
+  current_step?: "extract" | "merge" | "summary" | null;
+  failed_step?: string | null;
+  progress_pct: number;
+  message: string;
+  error?: string | null;
+}
+
+export interface CitationSource {
+  chunk_id: string;
+  evidence_id: string;
+  evidence_seq: number;
+  file_name: string;
+  mime_type: string;
+  sha256_hash: string;
+  sha256_verified: boolean;
+  text: string;
+  page_or_segment?: string;
+  line_number: number;
+  sender?: string;
+  timestamp_str?: string;
+  confidence: number;
+  ocr_engine: string;
 }
 
 export interface LlmHealth {
@@ -162,6 +219,101 @@ export async function fetchEvents(token: string, caseId: string): Promise<Forens
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchMergedEvents(token: string, caseId: string): Promise<MergedEvents> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/events/merged`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function reviewEvent(
+  token: string,
+  caseId: string,
+  eventId: string,
+  action: "approve" | "reject" | "edit",
+  editData?: {
+    event?: string;
+    who?: string;
+    to_whom?: string;
+    date?: string;
+    quote?: string;
+  }
+): Promise<ForensicEvent> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/events/${eventId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      action,
+      ...editData,
+    }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchLatestSummary(token: string, caseId: string): Promise<CaseSummary | null> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/summary`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function triggerSummary(token: string, caseId: string): Promise<{ case_id: string; status: string; progress: string; error?: string | null }> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/summary`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchSummaryStatus(token: string, caseId: string): Promise<{ case_id: string; status: string; progress: string; error?: string | null }> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/summary/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function triggerProcessEverything(token: string, caseId: string, resumeFrom?: string): Promise<PipelineStatus> {
+  const url = resumeFrom
+    ? `${API_BASE_URL}/api/cases/${caseId}/process-all?resume_from=${encodeURIComponent(resumeFrom)}`
+    : `${API_BASE_URL}/api/cases/${caseId}/process-all`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ detail: "Pipeline trigger failed" }));
+    throw new Error(errorData.detail || "Pipeline trigger failed");
+  }
+  return res.json();
+}
+
+export async function fetchPipelineStatus(token: string, caseId: string): Promise<PipelineStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/process-all/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchCitationSource(token: string, caseId: string, chunkId: string): Promise<CitationSource> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/citation/${encodeURIComponent(chunkId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({ detail: "Citation fetch failed" }));
+    throw new Error(errorData.detail || "Citation fetch failed");
+  }
   return res.json();
 }
 

@@ -290,7 +290,7 @@ def get_citation_source(
         details={
             "chunk_id": chunk.chunk_id,
             "evidence_id": evidence.id,
-            "filename": evidence.sanitized_filename,
+            "filename": evidence.file_name,
             "sha256_verified": True,
         },
     )
@@ -299,7 +299,7 @@ def get_citation_source(
         "chunk_id": chunk.chunk_id,
         "evidence_id": evidence.id,
         "evidence_seq": evidence.evidence_seq,
-        "file_name": evidence.sanitized_filename,
+        "file_name": evidence.file_name,
         "mime_type": evidence.mime_type,
         "text": chunk.text,
         "page_or_segment": chunk.page_or_segment,

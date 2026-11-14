@@ -12,13 +12,15 @@ def verify_event(
     chunk_text: str,
     nlp_candidates: Dict[str, Any],
     sender: Optional[str] = None,
+    timestamp_str: Optional[str] = None,
 ) -> Tuple[bool, str, str]:
     """
     Enforces Rule 4 from GEMINI.md:
     'Every AI claim must include evidence_id + exact quote. Code verifies the quote exists in the source;
     drop or flag anything unverified. The LLM never invents facts and temperature is 0.'
 
-    Also verifies who and to_whom against chunk text, detected entities, AND sender metadata.
+    Also verifies who and to_whom against chunk text, detected entities, AND sender metadata,
+    and date claims against chunk text, detected dates, AND timestamp metadata.
 
     Returns: (is_accepted, status, verification_notes)
     - status: 'verified' or 'needs_review'
@@ -51,15 +53,24 @@ def verify_event(
 
         if norm_date in norm_chunk:
             found_date = True
+        elif timestamp_str and (norm_date in normalize_text(timestamp_str) or normalize_text(timestamp_str) in norm_date):
+            found_date = True
         else:
-            # Check against dateparser detected dates
-            for d in nlp_candidates.get("dates", []):
-                if norm_date in normalize_text(d) or normalize_text(d) in norm_date:
+            if timestamp_str:
+                import dateparser
+                parsed_ts = dateparser.parse(timestamp_str)
+                if parsed_ts and (norm_date == parsed_ts.strftime("%Y-%m-%d") or norm_date in parsed_ts.strftime("%Y-%m-%d")):
                     found_date = True
-                    break
+
+            if not found_date:
+                # Check against dateparser detected dates
+                for d in nlp_candidates.get("dates", []):
+                    if norm_date in normalize_text(d) or normalize_text(d) in norm_date:
+                        found_date = True
+                        break
 
         if not found_date:
-            notes.append("Date claim not directly corroborated by source text.")
+            notes.append("Date claim not directly corroborated by source text or timestamp metadata.")
             return True, "needs_review", "; ".join(notes)
 
     # 3. Check actor grounding (who and to_whom against chunk text, sender metadata, and NLP candidates)

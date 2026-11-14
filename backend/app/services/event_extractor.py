@@ -61,7 +61,7 @@ def extract_events_for_case(case_id: str, user_id: str, db: Session, batch_size:
         chunk_batch = chunks[i : i + batch_size]
 
         # 1. NLP pre-extraction for entity & date grounding
-        combined_text = "\n".join([c.text for c in chunk_batch])
+        combined_text = "\n".join([f"{c.text} {c.sender or ''} {c.timestamp_str or ''}" for c in chunk_batch])
         nlp_candidates = extract_entities_and_dates(combined_text)
 
         # 2. Build armored prompt with strict untrusted data boundaries
@@ -127,6 +127,7 @@ def extract_events_for_case(case_id: str, user_id: str, db: Session, batch_size:
 
             chunk_text = source_chunk.text if source_chunk else combined_text
             chunk_sender = source_chunk.sender if source_chunk else None
+            chunk_timestamp = source_chunk.timestamp_str if source_chunk else None
             chunk_id_val = source_chunk.chunk_id if source_chunk else None
             evidence_id_val = source_chunk.evidence_id if source_chunk else chunk_batch[0].evidence_id
 
@@ -135,6 +136,7 @@ def extract_events_for_case(case_id: str, user_id: str, db: Session, batch_size:
                 chunk_text,
                 nlp_candidates,
                 sender=chunk_sender,
+                timestamp_str=chunk_timestamp,
             )
 
             # Drop fake quotes if quote doesn't exist at all, or flag as needs_review
