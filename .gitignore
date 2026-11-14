@@ -1,0 +1,20 @@
+﻿# secrets
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env.local
+
+# python
+__pycache__/
+.venv/
+venv/
+.pytest_cache/
+
+# node
+node_modules/
+.next/
+
+# local test data
+*.db
+storage_data/
