@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,10 +22,11 @@ class Settings(BaseSettings):
     # Database connection URL
     DATABASE_URL: str = "sqlite:///./chronicle_shield.db"
 
-    # LLM Settings (Module 3)
+    # LLM Settings (Module 3 & 4)
     LLM_PROVIDER: str = "gemini"  # gemini, ollama, or mock
     GEMINI_API_KEY: str = ""
     LLM_MODEL: str = ""  # Read from env only; must not be hard-coded
+    LLM_FALLBACK_MODEL: Optional[str] = ""  # Optional fallback model tried once if main model fails
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
 

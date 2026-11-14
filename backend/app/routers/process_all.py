@@ -9,6 +9,8 @@ from backend.app.models.case import Case
 from backend.app.auth.security import get_current_user, CurrentUser
 from backend.app.services.event_extractor import extract_events_for_case
 from backend.app.services.event_merger import merge_events_for_case
+from backend.app.services.duplicate_detector import detect_duplicates_for_case
+from backend.app.services.contradiction_detector import detect_contradictions_for_case
 from backend.app.services.summary_generator import generate_summary_for_case
 
 router = APIRouter(prefix="/api/cases/{case_id}/process-all", tags=["pipeline"])
@@ -19,7 +21,7 @@ pipeline_statuses: Dict[str, Dict[str, Any]] = {}
 class PipelineStatusResponse(BaseModel):
     case_id: str
     status: str  # idle, in_progress, completed, failed
-    current_step: Optional[str] = None  # extract, merge, summary
+    current_step: Optional[str] = None  # extract, merge, duplicates, contradictions, summary
     failed_step: Optional[str] = None
     progress_pct: int
     message: str
@@ -37,13 +39,15 @@ def _verify_case_access(case_id: str, current_user: CurrentUser, db: Session) ->
 
 def run_pipeline_background(case_id: str, user_id: str, resume_from: Optional[str] = None):
     """
-    Executes Process Everything pipeline in background:
-    Step 1: Event Extraction (0-33%)
-    Step 2: Event Merge & Deduplication (34-66%)
-    Step 3: Cited Summary Generation & Verification (67-100%)
+    Executes Process Everything pipeline in background (Module 4 & 5):
+    Step 1: Event Extraction (0-20%)
+    Step 2: Event Merge & Chronological Grouping (20-40%)
+    Step 3: Duplicate Detection (SHA-256, ImageHash, SentenceTransformers) (40-60%)
+    Step 4: Contradiction Engine (Code Rules & Grounded LLM Explanations) (60-80%)
+    Step 5: Cited Summary Generation & Sentence Verification (80-100%)
     Supports resuming from failed step.
     """
-    steps = ["extract", "merge", "summary"]
+    steps = ["extract", "merge", "duplicates", "contradictions", "summary"]
     start_idx = 0
     if resume_from and resume_from in steps:
         start_idx = steps.index(resume_from)
@@ -58,28 +62,48 @@ def run_pipeline_background(case_id: str, user_id: str, resume_from: Optional[st
                 "current_step": "extract",
                 "failed_step": None,
                 "progress_pct": 10,
-                "message": "Step 1/3: Extracting and verifying events with LLM...",
+                "message": "Step 1/5: Extracting and verifying events with LLM...",
                 "error": None,
             }
             extract_events_for_case(case_id=case_id, user_id=user_id, db=db)
-            pipeline_statuses[case_id]["progress_pct"] = 33
+            pipeline_statuses[case_id]["progress_pct"] = 20
 
         # Step 2: Merge
         if start_idx <= 1:
             pipeline_statuses[case_id].update({
                 "current_step": "merge",
-                "progress_pct": 45,
-                "message": "Step 2/3: Deduplicating and grouping events chronologically...",
+                "progress_pct": 30,
+                "message": "Step 2/5: Deduplicating and grouping events chronologically...",
             })
             merge_events_for_case(case_id=case_id, db=db, verified_only=False)
-            pipeline_statuses[case_id]["progress_pct"] = 66
+            pipeline_statuses[case_id]["progress_pct"] = 40
 
-        # Step 3: Summary
+        # Step 3: Duplicates
         if start_idx <= 2:
             pipeline_statuses[case_id].update({
+                "current_step": "duplicates",
+                "progress_pct": 50,
+                "message": "Step 3/5: Detecting exact (SHA-256), image, and text duplicates...",
+            })
+            detect_duplicates_for_case(case_id=case_id, user_id=user_id, db=db)
+            pipeline_statuses[case_id]["progress_pct"] = 60
+
+        # Step 4: Contradictions
+        if start_idx <= 3:
+            pipeline_statuses[case_id].update({
+                "current_step": "contradictions",
+                "progress_pct": 70,
+                "message": "Step 4/5: Running contradiction rules and LLM explanations...",
+            })
+            detect_contradictions_for_case(case_id=case_id, user_id=user_id, db=db)
+            pipeline_statuses[case_id]["progress_pct"] = 80
+
+        # Step 5: Summary
+        if start_idx <= 4:
+            pipeline_statuses[case_id].update({
                 "current_step": "summary",
-                "progress_pct": 75,
-                "message": "Step 3/3: Synthesizing and verifying sentence-level cited summary...",
+                "progress_pct": 90,
+                "message": "Step 5/5: Synthesizing and verifying sentence-level cited summary...",
             })
             generate_summary_for_case(case_id=case_id, user_id=user_id, db=db)
             pipeline_statuses[case_id]["progress_pct"] = 100
@@ -113,34 +137,33 @@ def run_pipeline_background(case_id: str, user_id: str, resume_from: Optional[st
 def trigger_process_everything(
     case_id: str,
     background_tasks: BackgroundTasks,
-    resume_from: Optional[str] = Query(None, description="Step to resume from: extract, merge, summary"),
+    resume_from: Optional[str] = Query(None, description="Optional step name to resume from on failure"),
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Module 4: Runs Extraction -> Merge -> Summary in a background pipeline.
+    Triggers the end-to-end Process Everything pipeline.
     Enforces one run per case at a time.
-    Supports retrying from a failed step.
     """
     case = _verify_case_access(case_id, current_user, db)
 
-    # Check if a pipeline is already running for this case
-    current_status = pipeline_statuses.get(case.id, {}).get("status")
-    if current_status == "in_progress":
+    existing_status = pipeline_statuses.get(case_id)
+    if existing_status and existing_status.get("status") == "in_progress":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Process Everything pipeline is already running for this case.",
+            detail="Pipeline execution already in progress for this case",
         )
 
-    pipeline_statuses[case.id] = {
+    pipeline_statuses[case_id] = {
         "case_id": case.id,
         "status": "in_progress",
         "current_step": resume_from or "extract",
         "failed_step": None,
         "progress_pct": 5,
-        "message": f"Pipeline queued (starting from '{resume_from or 'extract'}')...",
+        "message": f"Starting pipeline execution (from {resume_from or 'start'})...",
         "error": None,
     }
+
     background_tasks.add_task(
         run_pipeline_background,
         case_id=case.id,
@@ -148,7 +171,7 @@ def trigger_process_everything(
         resume_from=resume_from,
     )
 
-    return PipelineStatusResponse(**pipeline_statuses[case.id])
+    return PipelineStatusResponse(**pipeline_statuses[case_id])
 
 
 @router.get("/status", response_model=PipelineStatusResponse)
@@ -157,17 +180,18 @@ def get_pipeline_status(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Returns current Process Everything pipeline status."""
-    case = _verify_case_access(case_id, current_user, db)
+    """Returns the live status of the Process Everything pipeline for a case."""
+    _verify_case_access(case_id, current_user, db)
+
     status_data = pipeline_statuses.get(
-        case.id,
+        case_id,
         {
-            "case_id": case.id,
+            "case_id": case_id,
             "status": "idle",
             "current_step": None,
             "failed_step": None,
             "progress_pct": 0,
-            "message": "Pipeline idle",
+            "message": "No active pipeline running for this case",
             "error": None,
         },
     )

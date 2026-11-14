@@ -2,14 +2,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.config import settings
 from backend.app.database import engine, Base
-from backend.app.routers import cases, evidence, verify, events, llm_health, summary, process_all
+from backend.app.routers import (
+    cases,
+    evidence,
+    verify,
+    events,
+    llm_health,
+    summary,
+    process_all,
+    duplicates,
+    contradictions,
+)
 
 # Ensure database tables exist
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="Chronicle Shield - AI Digital Evidence Platform (Modules 1, 2, 3, 4)",
+    description="Chronicle Shield - AI Digital Evidence Platform (Modules 1, 2, 3, 4, 5)",
     version="1.0.0",
 )
 
@@ -29,6 +39,8 @@ app.include_router(verify.router)
 app.include_router(events.router)
 app.include_router(summary.router)
 app.include_router(process_all.router)
+app.include_router(duplicates.router)
+app.include_router(contradictions.router)
 app.include_router(llm_health.router)
 
 
