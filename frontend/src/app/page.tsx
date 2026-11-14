@@ -34,6 +34,7 @@ import {
   Chunk,
   ForensicEvent,
   VerificationResult,
+  LlmHealth,
   fetchCases,
   createCase,
   uploadEvidence,
@@ -42,6 +43,7 @@ import {
   extractEvents,
   fetchEvents,
   fetchExtractionStatus,
+  fetchLlmHealth,
   verifyCase,
 } from "@/lib/api";
 
@@ -71,6 +73,7 @@ export default function Dashboard() {
 
   // Filter for events
   const [eventFilter, setEventFilter] = useState<"all" | "verified" | "needs_review">("all");
+  const [llmHealth, setLlmHealth] = useState<LlmHealth | null>(null);
 
   useEffect(() => {
     const savedToken = localStorage.getItem("cs_jwt_token") || "";
@@ -80,6 +83,18 @@ export default function Dashboard() {
   useEffect(() => {
     if (token) {
       loadCases();
+      fetchLlmHealth(token)
+        .then((data) => setLlmHealth(data))
+        .catch(() =>
+          setLlmHealth({
+            status: "error",
+            provider: "unknown",
+            model: "unknown",
+            detail: "AI service unreachable",
+          })
+        );
+    } else {
+      setLlmHealth(null);
     }
   }, [token]);
 
@@ -275,9 +290,29 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Auth Token Input */}
-        <div className="flex items-center gap-2 w-full md:w-auto">
-          <div className="relative flex-1 md:w-80">
+        {/* Auth Token Input & AI Status Badge */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 w-full md:w-auto">
+          {/* AI Status Badge */}
+          {token && llmHealth && (
+            <div>
+              {llmHealth.status === "ok" ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  AI ready ({llmHealth.provider}, {llmHealth.model})
+                </span>
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-red-950/60 text-red-400 border border-red-500/40 shadow-sm"
+                  title={llmHealth.detail}
+                >
+                  <span className="w-2 h-2 rounded-full bg-red-400"></span>
+                  AI error: {llmHealth.detail ? llmHealth.detail.slice(0, 30) : "Offline"}
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="relative flex-1 md:w-72">
             <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-500" />
             <input
               type="password"

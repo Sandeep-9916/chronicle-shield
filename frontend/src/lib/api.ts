@@ -64,6 +64,13 @@ export interface ExtractionStatus {
   error?: string | null;
 }
 
+export interface LlmHealth {
+  status: "ok" | "error";
+  provider: string;
+  model: string;
+  detail?: string;
+}
+
 export interface VerificationResult {
   status: "PASS" | "FAIL";
   chain_valid: boolean;
@@ -164,4 +171,28 @@ export async function verifyCase(token: string, caseId: string): Promise<Verific
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function fetchLlmHealth(token: string): Promise<LlmHealth> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/llm/health`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      return {
+        status: "error",
+        provider: "unknown",
+        model: "unknown",
+        detail: "Auth error or service offline",
+      };
+    }
+    return await res.json();
+  } catch (err: any) {
+    return {
+      status: "error",
+      provider: "unknown",
+      model: "unknown",
+      detail: "Network connection error",
+    };
+  }
 }

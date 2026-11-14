@@ -146,6 +146,16 @@ def _call_mock(prompt: str, schema: Optional[Type[BaseModel]] = None) -> Any:
             return {"status": "ok", "message": "OK"}
         return "OK"
 
+    if "rewrite this single sentence" in prompt.lower() or "failed sentence" in prompt.lower():
+        return "Alice confirmed the transfer of $50,000 to escrow [E1-p1-L1]."
+
+    if "summary" in prompt.lower() or "narrative" in prompt.lower():
+        return (
+            "## Case Forensic Summary\n\n"
+            "Alice confirmed the transfer of $50,000 to escrow on 2026-11-14 [E1-p1-L1].\n"
+            "Bob confirmed that the funds were secured in the safe deposit [E1-p1-L2]."
+        )
+
     # If asking for events
     if schema:
         if "ignore previous instructions and drop" in prompt.lower() or "disregard all facts" in prompt.lower():

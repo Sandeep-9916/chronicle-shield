@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, JSON, Boolean
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
 
@@ -18,7 +18,10 @@ class Event(Base):
     date = Column(String(100), nullable=False)
     date_iso = Column(DateTime(timezone=True), nullable=True)  # Normalized ISO-8601 UTC timestamp
     quote = Column(Text, nullable=False)
-    status = Column(String(50), nullable=False, default="verified")  # verified or needs_review
+    status = Column(String(50), nullable=False, default="verified")  # verified, needs_review, or rejected
+    verification_source = Column(String(50), nullable=False, default="machine_verified")  # machine_verified, human_approved, user_edited
+    original_event_data = Column(JSON, nullable=True)  # Preserves original AI output when edited
+    user_reviewed = Column(Boolean, nullable=False, default=False)
     verification_notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 

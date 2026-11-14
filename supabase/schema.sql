@@ -134,13 +134,17 @@ CREATE TABLE IF NOT EXISTS events (
     date VARCHAR(100) NOT NULL,
     date_iso TIMESTAMPTZ,           -- Normalized ISO-8601 UTC timestamp (nullable)
     quote TEXT NOT NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'verified', -- verified or needs_review
+    status VARCHAR(50) NOT NULL DEFAULT 'verified', -- verified, needs_review, or rejected
+    verification_source VARCHAR(50) NOT NULL DEFAULT 'machine_verified', -- machine_verified, human_approved, user_edited
+    original_event_data JSONB,      -- Preserves original AI output when user edits
+    user_reviewed BOOLEAN NOT NULL DEFAULT FALSE,
     verification_notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_case_id ON events(case_id);
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
+CREATE INDEX IF NOT EXISTS idx_events_verification_source ON events(verification_source);
 
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 
@@ -150,6 +154,36 @@ CREATE POLICY "Users can view events for their own cases"
         EXISTS (
             SELECT 1 FROM cases
             WHERE cases.id = events.case_id AND cases.user_id = auth.uid()
+        )
+    );
+
+
+-- ------------------------------------------------------------------------------
+-- 5. Case Summaries Table (Module 4 Verifiable Cited Summary)
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS case_summaries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    version INT NOT NULL DEFAULT 1,
+    status VARCHAR(50) NOT NULL DEFAULT 'active', -- active or outdated
+    summary_text TEXT NOT NULL,
+    citations JSONB NOT NULL DEFAULT '[]'::jsonb,
+    removed_sentences JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,  -- Counts of machine_verified, human_approved, user_edited
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_summaries_case_id ON case_summaries(case_id);
+CREATE INDEX IF NOT EXISTS idx_case_summaries_status ON case_summaries(status);
+
+ALTER TABLE case_summaries ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view case summaries for their own cases"
+    ON case_summaries FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM cases
+            WHERE cases.id = case_summaries.case_id AND cases.user_id = auth.uid()
         )
     );
 
