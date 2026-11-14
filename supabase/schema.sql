@@ -1,15 +1,17 @@
 -- ==============================================================================
--- Chronicle Shield - Database Schema (Modules 1 & 2)
+-- Chronicle Shield - Database Schema (Modules 1, 2, and 3)
 -- ==============================================================================
--- Tables: cases, evidence, chunks, audit_log
+-- Tables: cases, evidence, chunks, events, llm_cache, audit_log
 -- Security & Integrity:
--- 1. Row-Level Security (RLS) on cases, evidence, chunks, and audit_log
+-- 1. Row-Level Security (RLS) on cases, evidence, chunks, events, and audit_log
 -- 2. One hash chain per case with sequence numbers: UNIQUE (case_id, seq)
 -- 3. Canonical hashing of (seq, case_id, user_id, action, evidence_id, timestamp, previous_hash)
 -- 4. DB triggers blocking UPDATE, DELETE, and TRUNCATE on audit_log
 -- 5. Revoked write/modification permissions on audit_log from anon and authenticated roles
 -- 6. Private storage bucket for evidence, random UUID paths, no overwrite/delete policies
 -- 7. Chunks table for derived OCR / speech-to-text extractions with confidence tracking
+-- 8. Events table for verified timeline claims grounded in source evidence quotes
+-- 9. LLM prompt hash cache to prevent duplicate calls and conserve quota
 -- ==============================================================================
 
 -- Enable UUID extension
@@ -87,7 +89,6 @@ CREATE POLICY "Users can upload evidence in their own cases"
 -- ------------------------------------------------------------------------------
 -- 3. Chunks Table (Module 2 Derived Extracted Text)
 -- ------------------------------------------------------------------------------
--- Original evidence files are never modified. Derived data is stored separately.
 CREATE TABLE IF NOT EXISTS chunks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
@@ -120,14 +121,64 @@ CREATE POLICY "Users can view chunks in their own cases"
 
 
 -- ------------------------------------------------------------------------------
--- 4. Audit Log Table (One Hash Chain Per Case)
+-- 4. Events Table (Module 3 AI Extracted & Verified Events)
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    evidence_id UUID REFERENCES evidence(id) ON DELETE CASCADE,
+    chunk_id VARCHAR(50),          -- Cited chunk identifier e.g. E3-p2-L5
+    event TEXT NOT NULL,
+    who VARCHAR(255) NOT NULL,
+    to_whom VARCHAR(255) NOT NULL,
+    date VARCHAR(100) NOT NULL,
+    date_iso TIMESTAMPTZ,           -- Normalized ISO-8601 UTC timestamp (nullable)
+    quote TEXT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'verified', -- verified or needs_review
+    verification_notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_case_id ON events(case_id);
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
+
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view events for their own cases"
+    ON events FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM cases
+            WHERE cases.id = events.case_id AND cases.user_id = auth.uid()
+        )
+    );
+
+
+-- ------------------------------------------------------------------------------
+-- 5. LLM Prompt Cache Table (Module 3 Deterministic LLM Gateway)
+-- Backend-only: RLS enabled, NO user policies, access revoked from anon/auth
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS llm_cache (
+    prompt_hash VARCHAR(64) PRIMARY KEY,
+    provider VARCHAR(50) NOT NULL,
+    model VARCHAR(100) NOT NULL,
+    response_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE llm_cache ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON llm_cache FROM anon, authenticated;
+
+
+-- ------------------------------------------------------------------------------
+-- 6. Audit Log Table (One Hash Chain Per Case)
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS audit_log (
     id BIGSERIAL PRIMARY KEY,
     case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     seq BIGINT NOT NULL,
     user_id UUID REFERENCES auth.users(id),
-    action VARCHAR(50) NOT NULL, -- e.g. CREATE_CASE, UPLOAD, VIEW, DOWNLOAD, PROCESS, VERIFY
+    action VARCHAR(50) NOT NULL, -- e.g. CREATE_CASE, UPLOAD, VIEW, DOWNLOAD, PROCESS, EXTRACT_EVENTS, VERIFY
     evidence_id UUID REFERENCES evidence(id) ON DELETE SET NULL,
     details JSONB NOT NULL DEFAULT '{}'::jsonb,
     previous_hash VARCHAR(64) NOT NULL,
@@ -147,7 +198,7 @@ CREATE POLICY "Users can view audit log for their own cases"
 
 
 -- ------------------------------------------------------------------------------
--- 5. Immutability Triggers & Permission Revocations
+-- 7. Immutability Triggers & Permission Revocations
 -- ------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION prevent_audit_log_modification()
 RETURNS TRIGGER AS $$
@@ -178,7 +229,7 @@ REVOKE UPDATE, DELETE, TRUNCATE ON audit_log FROM anon, authenticated, PUBLIC;
 
 
 -- ------------------------------------------------------------------------------
--- 6. Private Storage Bucket Setup for Evidence
+-- 8. Private Storage Bucket Setup for Evidence
 -- ------------------------------------------------------------------------------
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('evidence', 'evidence', false)

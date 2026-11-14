@@ -21,5 +21,11 @@ class Settings(BaseSettings):
     # Database connection URL
     DATABASE_URL: str = "sqlite:///./chronicle_shield.db"
 
+    # LLM Settings (Module 3)
+    LLM_PROVIDER: str = "gemini"  # gemini, ollama, or mock
+    GEMINI_API_KEY: str = ""
+    LLM_MODEL: str = ""  # Read from env only; must not be hard-coded
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
 
 settings = Settings()

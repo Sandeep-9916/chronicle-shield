@@ -40,6 +40,30 @@ export interface Chunk {
   created_at: string;
 }
 
+export interface ForensicEvent {
+  id: string;
+  case_id: string;
+  evidence_id?: string;
+  chunk_id?: string;
+  event: string;
+  who: string;
+  to_whom: string;
+  date: string;
+  date_iso?: string;
+  quote: string;
+  status: "verified" | "needs_review";
+  verification_notes?: string;
+  created_at: string;
+}
+
+export interface ExtractionStatus {
+  case_id: string;
+  status: "idle" | "in_progress" | "completed" | "failed";
+  progress: string;
+  total: number;
+  error?: string | null;
+}
+
 export interface VerificationResult {
   status: "PASS" | "FAIL";
   chain_valid: boolean;
@@ -103,6 +127,31 @@ export async function fetchEvidence(token: string, caseId: string): Promise<Evid
 
 export async function fetchEvidenceChunks(token: string, caseId: string, evidenceId: string): Promise<Chunk[]> {
   const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/evidence/${evidenceId}/chunks`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function extractEvents(token: string, caseId: string): Promise<ExtractionStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/events/extract`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchExtractionStatus(token: string, caseId: string): Promise<ExtractionStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/events/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchEvents(token: string, caseId: string): Promise<ForensicEvent[]> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/events`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(await res.text());

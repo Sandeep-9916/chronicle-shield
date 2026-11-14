@@ -75,7 +75,7 @@ Run the full pytest suite from the root directory:
 python -m pytest backend/tests/ -v
 ```
 
-The 12 automated tests verify:
+The 17 automated tests verify:
 - `test_upload_valid_files_and_hash_calculation`: SHA-256 calculation, UUID storage paths, and filename sanitization.
 - `test_magic_byte_rejection`: Rejection of corrupted/spoofed files and non-UTF-8 text.
 - `test_chain_generation_and_verification_pass`: Cryptographic sequence linking across all actions.
@@ -88,3 +88,54 @@ The 12 automated tests verify:
 - `test_chat_export_parsing_and_chunking`: WhatsApp export regex parsing into sender, timestamp, and multiline messages.
 - `test_pdf_native_and_ocr_hybrid`: PyMuPDF native text extraction for page 1 + selective OCR triggering for scanned page 2.
 - `test_audit_chain_logs_process_action`: Verification that `PROCESS` events are chained and `/verify` returns `PASS`.
+- `test_llm_cache_deduplication`: Prompt SHA-256 caching saves tokens and avoids redundant API roundtrips.
+- `test_prompt_injection_defense`: Untrusted instructions inside evidence text ("ignore previous instructions") are quarantined as data and not executed.
+- `test_quote_verification_drops_or_flags_hallucinated_quote`: Hallucinated quotes not present in cited chunks are strictly marked as `needs_review` or dropped.
+- `test_llm_health_endpoint`: Health check endpoint verifies LLM operational readiness without leaking secrets or API keys.
+- `test_extract_events_e2e_and_audit_log`: End-to-end extraction from chunks, grounding verification, and hash-chaining of `EXTRACT_EVENTS`.
+
+---
+
+### Module 3: Grounded Event Extraction & Prompt Injection Defense
+
+> [!WARNING]
+> **Important Note on LLM Data Privacy**: The free Gemini API tier is intended strictly for fake/synthetic demo data and development testing. Never submit real, confidential, or sensitive digital evidence to third-party public LLM APIs without an enterprise-grade zero-data-retention agreement.
+
+1. **Centralized LLM Gateway (`backend/llm.py`)**:
+   - All LLM requests must route through `ask_llm(prompt, schema)`.
+   - The model name is read strictly from the `LLM_MODEL` environment variable (never hard-coded); a clear error is raised if empty.
+   - Configurable provider via `LLM_PROVIDER`: `gemini` (default), `ollama`, or `mock`.
+   - Strictly enforces temperature 0 for forensic reproducibility.
+   - Exponential backoff retry logic for HTTP 429 rate limits and schema parsing errors.
+   - Zero leakage: Never logs API keys, secret credentials, or raw evidence text.
+   - All endpoints, including `GET /api/llm/health`, require authenticated JWT tokens.
+
+2. **Database Prompt Caching (`llm_cache`)**:
+   - Caches structured JSON responses keyed by `SHA256(provider + model + prompt + schema)`.
+   - Protected with Row Level Security (RLS) enabled and zero client policies: access is revoked from `anon` and `authenticated` roles, making it strictly backend-service accessible.
+   - Prevents repeated API calls, avoids quota exhaustion, and guarantees deterministic outputs for identical prompts.
+
+3. **NLP Entity & Date Pre-Extraction**:
+   - Pre-processes chunks with spaCy (`en_core_web_sm`) to extract named entities (`PERSON`, `ORG`, `GPE`, `DATE`, `MONEY`).
+   - Parses and normalizes dates via `dateparser` into UTC ISO-8601 formatting, saving both original text (`date`) and normalized ISO (`date_iso`).
+
+4. **Prompt Injection & Tag Escaping Defense**:
+   - Treats chunk text strictly as untrusted data inside `<untrusted_evidence_data>` tags.
+   - System instructions explicitly forbid executing user instructions found within evidence text.
+   - Automatically sanitizes and escapes any closing `</untrusted_evidence_data>` tags in evidence text to prevent prompt boundary breakouts.
+
+5. **Quote, Actor & Sender Verification Engine**:
+   - Verifies that every extracted event's `quote` appears verbatim or near-exact in the cited chunk's text.
+   - Drops or marks events as `needs_review` if quotes are missing or fabricated by the LLM.
+   - Cross-checks `who` and `to_whom` against chunk text, detected entities, AND chunk sender metadata.
+
+6. **Asynchronous Background Extraction & Idempotent Case Replacement**:
+   - `POST /api/cases/{case_id}/events/extract` runs as an asynchronous background task.
+   - `GET /api/cases/{case_id}/events/status` provides live task status and progress for frontend polling.
+   - Re-running extraction for a case replaces prior events (preventing duplicate proliferation) and logs an `EXTRACT_EVENTS` entry in the cryptographic audit chain.
+
+7. **Frontend Events Timeline & Inspector**:
+   - Dedicated "Forensic Events" tab showing extracted chronological events.
+   - Real-time background task progress indicator and spinner.
+   - Filters by status: `All`, `Verified`, `Needs Review`.
+   - Displays status pills, quoted source text, actors (`who` -> `to_whom`), original date, ISO-8601 date, and source chunk references.

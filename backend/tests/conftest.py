@@ -12,6 +12,8 @@ from sqlalchemy.pool import StaticPool
 from backend.app.config import settings
 import backend.app.database as db_mod
 import backend.app.services.processor as proc_mod
+import backend.llm as llm_mod
+import backend.app.routers.events as events_router_mod
 from backend.app.database import Base, get_db
 from backend.app.main import app
 from backend.app.services.storage import storage_service
@@ -20,6 +22,8 @@ from backend.app.services.storage import storage_service
 TEST_JWT_SECRET = "test-secret-key-for-chronicle-shield-unit-tests-123"
 settings.SUPABASE_JWT_SECRET = TEST_JWT_SECRET
 settings.TESTING = True
+settings.LLM_PROVIDER = "mock"
+settings.LLM_MODEL = "mock-model"
 
 USER_A_ID = "11111111-1111-4111-8111-111111111111"
 USER_B_ID = "22222222-2222-4222-8222-222222222222"
@@ -78,11 +82,16 @@ def db_session():
     TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = TestingSessionLocal()
 
-    # Override SessionLocal for background tasks as well
+    # Override SessionLocal across modules
     orig_db_session = db_mod.SessionLocal
     orig_proc_session = proc_mod.SessionLocal
+    orig_llm_session = llm_mod.SessionLocal
+    orig_events_session = events_router_mod.SessionLocal
+
     db_mod.SessionLocal = TestingSessionLocal
     proc_mod.SessionLocal = TestingSessionLocal
+    llm_mod.SessionLocal = TestingSessionLocal
+    events_router_mod.SessionLocal = TestingSessionLocal
 
     # Configure temporary storage directory
     temp_dir = tempfile.mkdtemp()
@@ -94,6 +103,8 @@ def db_session():
     session.close()
     db_mod.SessionLocal = orig_db_session
     proc_mod.SessionLocal = orig_proc_session
+    llm_mod.SessionLocal = orig_llm_session
+    events_router_mod.SessionLocal = orig_events_session
     Base.metadata.drop_all(bind=engine)
     shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -101,10 +112,11 @@ def db_session():
 @pytest.fixture(scope="function")
 def client(db_session):
     def override_get_db():
+        session = db_mod.SessionLocal()
         try:
-            yield db_session
+            yield session
         finally:
-            pass
+            session.close()
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app) as test_client:

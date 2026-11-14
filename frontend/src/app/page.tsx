@@ -23,17 +23,25 @@ import {
   Layers,
   User,
   Calendar,
+  Sparkles,
+  Quote,
+  ArrowRight,
+  Filter,
 } from "lucide-react";
 import {
   Case,
   Evidence,
   Chunk,
+  ForensicEvent,
   VerificationResult,
   fetchCases,
   createCase,
   uploadEvidence,
   fetchEvidence,
   fetchEvidenceChunks,
+  extractEvents,
+  fetchEvents,
+  fetchExtractionStatus,
   verifyCase,
 } from "@/lib/api";
 
@@ -42,10 +50,15 @@ export default function Dashboard() {
   const [cases, setCases] = useState<Case[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string>("");
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([]);
+  const [eventsList, setEventsList] = useState<ForensicEvent[]>([]);
+  const [activeTab, setActiveTab] = useState<"evidence" | "events">("evidence");
+
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isExtractingEvents, setIsExtractingEvents] = useState(false);
+  const [extractionStatusText, setExtractionStatusText] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerificationResult | null>(null);
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
@@ -55,6 +68,9 @@ export default function Dashboard() {
   const [activeEvidence, setActiveEvidence] = useState<Evidence | null>(null);
   const [activeChunks, setActiveChunks] = useState<Chunk[]>([]);
   const [isLoadingChunks, setIsLoadingChunks] = useState(false);
+
+  // Filter for events
+  const [eventFilter, setEventFilter] = useState<"all" | "verified" | "needs_review">("all");
 
   useEffect(() => {
     const savedToken = localStorage.getItem("cs_jwt_token") || "";
@@ -70,6 +86,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (token && selectedCaseId) {
       loadEvidence(selectedCaseId);
+      loadEvents(selectedCaseId);
       setVerifyResult(null);
     }
   }, [token, selectedCaseId]);
@@ -116,6 +133,15 @@ export default function Dashboard() {
     }
   };
 
+  const loadEvents = async (caseId: string) => {
+    try {
+      const data = await fetchEvents(token, caseId);
+      setEventsList(data);
+    } catch (err: any) {
+      // Ignore if no events
+    }
+  };
+
   const handleCreateCase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
@@ -146,6 +172,45 @@ export default function Dashboard() {
       setErrorMessage(err.message || "Upload failed. Verify magic bytes and file size.");
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleExtractEvents = async () => {
+    if (!selectedCaseId) return;
+    setIsExtractingEvents(true);
+    setErrorMessage(null);
+    setExtractionStatusText("Initiating background event extraction with LLM...");
+    setActiveTab("events");
+    try {
+      await extractEvents(token, selectedCaseId);
+      
+      // Poll background status every 1.5 seconds
+      const pollTimer = setInterval(async () => {
+        try {
+          const statusRes = await fetchExtractionStatus(token, selectedCaseId);
+          if (statusRes.status === "in_progress") {
+            setExtractionStatusText(statusRes.progress || "Extracting events in background...");
+          } else if (statusRes.status === "completed") {
+            clearInterval(pollTimer);
+            setIsExtractingEvents(false);
+            setExtractionStatusText(null);
+            await loadEvents(selectedCaseId);
+          } else if (statusRes.status === "failed") {
+            clearInterval(pollTimer);
+            setIsExtractingEvents(false);
+            setExtractionStatusText(null);
+            setErrorMessage(statusRes.error || "Event extraction failed in background.");
+          }
+        } catch {
+          clearInterval(pollTimer);
+          setIsExtractingEvents(false);
+          setExtractionStatusText(null);
+        }
+      }, 1500);
+    } catch (err: any) {
+      setIsExtractingEvents(false);
+      setExtractionStatusText(null);
+      setErrorMessage(err.message || "Failed to initiate event extraction. Check LLM provider settings.");
     }
   };
 
@@ -182,48 +247,10 @@ export default function Dashboard() {
     setTimeout(() => setCopiedHash(null), 2000);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "COMPLETED":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-950/50 text-emerald-400 border border-emerald-500/30">
-            <CheckCircle2 className="w-3 h-3" /> Processed
-          </span>
-        );
-      case "PROCESSING":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-950/50 text-blue-400 border border-blue-500/30">
-            <RefreshCw className="w-3 h-3 animate-spin" /> Extracting...
-          </span>
-        );
-      case "FAILED":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-950/50 text-red-400 border border-red-500/30">
-            <XCircle className="w-3 h-3" /> Failed
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-950/50 text-amber-400 border border-amber-500/30">
-            <Clock className="w-3 h-3" /> Queued
-          </span>
-        );
-    }
-  };
-
-  const getConfidenceBadge = (confidence: number) => {
-    let colorClass = "text-emerald-400 bg-emerald-950/50 border-emerald-500/30";
-    if (confidence < 50.0) {
-      colorClass = "text-red-400 bg-red-950/50 border-red-500/30";
-    } else if (confidence < 80.0) {
-      colorClass = "text-amber-400 bg-amber-950/50 border-amber-500/30";
-    }
-    return (
-      <span className={`px-2 py-0.5 rounded border text-[10px] font-mono font-medium ${colorClass}`}>
-        {confidence.toFixed(1)}% conf
-      </span>
-    );
-  };
+  const filteredEvents = eventsList.filter((ev) => {
+    if (eventFilter === "all") return true;
+    return ev.status === eventFilter;
+  });
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
@@ -238,11 +265,11 @@ export default function Dashboard() {
               <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
                 Chronicle Shield
                 <span className="text-xs bg-slate-800 text-slate-300 font-medium px-2 py-0.5 rounded border border-slate-700">
-                  Module 2: Ingestion & Extraction Pipeline
+                  Module 3: AI Event Extraction & Verifier
                 </span>
               </h1>
               <p className="text-sm text-slate-400">
-                Multi-Modal OCR, Audio STT, WhatsApp Parser & Structured Evidence Chunks
+                Tamper-Evident Evidence Vault, Multi-Modal Processing & Grounded Timeline Events
               </p>
             </div>
           </div>
@@ -322,7 +349,7 @@ export default function Dashboard() {
               </span>
               <input
                 type="text"
-                placeholder="Case Title (e.g. Operation DeepShield)"
+                placeholder="Case Title (e.g. Investigation #105)"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500"
@@ -348,7 +375,7 @@ export default function Dashboard() {
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-2">
               <Upload className="w-4 h-4 text-indigo-400" />
-              Upload & Extract Pipeline
+              Upload Evidence
             </h2>
             <p className="text-xs text-slate-400 mb-4">
               Supported: <code className="text-indigo-300">jpg, png, pdf, wav, mp3, m4a, txt</code>. Max 25MB.
@@ -377,7 +404,7 @@ export default function Dashboard() {
                 ) : (
                   <>
                     <Upload className="w-3.5 h-3.5" />
-                    Commit & Auto-Extract
+                    Commit to Vault
                   </>
                 )}
               </button>
@@ -385,7 +412,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right Columns: Evidence Repository & Verification Panel */}
+        {/* Right Columns: Evidence & Events Tabs */}
         <div className="lg:col-span-2 space-y-6">
           {/* Integrity Verification Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
@@ -396,27 +423,42 @@ export default function Dashboard() {
                   Tamper-Evident Verification Engine
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
-                  Recomputes sequential hash chain (including PROCESS actions) & verifies storage files.
+                  Recomputes full hash chain (uploads, background processing, event extractions) & file bytes.
                 </p>
               </div>
 
-              <button
-                onClick={handleVerify}
-                disabled={!selectedCaseId || isVerifying}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-xs font-medium px-4 py-2.5 rounded-lg transition-colors flex items-center gap-2 shrink-0 shadow-lg shadow-indigo-600/10"
-              >
-                {isVerifying ? (
-                  <>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleExtractEvents}
+                  disabled={!selectedCaseId || isExtractingEvents || evidenceList.length === 0}
+                  className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white text-xs font-medium px-3.5 py-2.5 rounded-lg transition-colors flex items-center gap-1.5 shadow-lg shadow-indigo-600/10"
+                >
+                  {isExtractingEvents ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Extracting Events...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Extract Events with AI
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleVerify}
+                  disabled={!selectedCaseId || isVerifying}
+                  className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-white text-xs font-medium px-3.5 py-2.5 rounded-lg transition-colors flex items-center gap-1.5 border border-slate-700"
+                >
+                  {isVerifying ? (
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    Re-hashing Chain...
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4" />
-                    Verify Chain & Files
-                  </>
-                )}
-              </button>
+                  ) : (
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  )}
+                  Verify Vault
+                </button>
+              </div>
             </div>
 
             {/* Verification Result Banner */}
@@ -474,85 +516,236 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Evidence Vault List */}
+          {/* Main Tabs Container: Evidence Vault vs Events View */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4 flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <FileCheck className="w-4 h-4 text-indigo-400" />
-                Evidence Repository ({evidenceList.length})
-              </span>
-              <button
-                onClick={() => selectedCaseId && loadEvidence(selectedCaseId)}
-                className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 normal-case"
-              >
-                <RefreshCw className="w-3 h-3" /> Refresh
-              </button>
-            </h2>
-
-            {evidenceList.length === 0 ? (
-              <div className="text-center py-12 border border-dashed border-slate-800 rounded-lg">
-                <FileText className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                <p className="text-sm text-slate-400">No evidence recorded for this case yet.</p>
-                <p className="text-xs text-slate-500 mt-1">Upload an image, PDF, audio, or chat export to extract chunks.</p>
+            {/* Tab Headers */}
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-5">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setActiveTab("evidence")}
+                  className={`flex items-center gap-2 pb-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+                    activeTab === "evidence"
+                      ? "border-indigo-500 text-white"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <FileCheck className="w-4 h-4 text-indigo-400" />
+                  Evidence Repository ({evidenceList.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab("events")}
+                  className={`flex items-center gap-2 pb-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+                    activeTab === "events"
+                      ? "border-indigo-500 text-white"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                  Extracted Events ({eventsList.length})
+                </button>
               </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-950/70 text-slate-400 border-b border-slate-800">
-                    <tr>
-                      <th className="py-2.5 px-3">ID</th>
-                      <th className="py-2.5 px-3">File Name</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">Status</th>
-                      <th className="py-2.5 px-3">SHA-256 Hash</th>
-                      <th className="py-2.5 px-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {evidenceList.map((ev) => (
-                      <tr key={ev.id} className="hover:bg-slate-800/40">
-                        <td className="py-3 px-3 font-mono font-bold text-indigo-400">
-                          E{ev.evidence_seq}
-                        </td>
-                        <td className="py-3 px-3 font-medium text-slate-200">
-                          {ev.file_name}
-                          <div className="text-[10px] text-slate-500 font-mono">
-                            {(ev.file_size / 1024).toFixed(1)} KB
-                          </div>
-                        </td>
-                        <td className="py-3 px-3 text-slate-400 font-mono text-[11px]">
-                          {ev.mime_type}
-                        </td>
-                        <td className="py-3 px-3">
-                          {getStatusBadge(ev.processing_status)}
-                        </td>
-                        <td className="py-3 px-3">
-                          <button
-                            onClick={() => copyToClipboard(ev.sha256_hash)}
-                            className="flex items-center gap-1.5 font-mono text-[11px] bg-slate-950 hover:bg-slate-800 border border-slate-800 px-2 py-1 rounded text-slate-300 transition-colors"
-                            title="Click to copy SHA-256 hash"
-                          >
-                            <span>{ev.sha256_hash.substring(0, 12)}...</span>
-                            {copiedHash === ev.sha256_hash ? (
-                              <Check className="w-3 h-3 text-emerald-400" />
+
+              {activeTab === "events" && (
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Filter className="w-3 h-3 text-slate-500" />
+                  <select
+                    value={eventFilter}
+                    onChange={(e: any) => setEventFilter(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 text-slate-300 text-[11px] rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="all">All Events</option>
+                    <option value="verified">Verified Only</option>
+                    <option value="needs_review">Needs Review</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* TAB 1: Evidence Repository Table */}
+            {activeTab === "evidence" && (
+              <>
+                {evidenceList.length === 0 ? (
+                  <div className="text-center py-12 border border-dashed border-slate-800 rounded-lg">
+                    <FileText className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                    <p className="text-sm text-slate-400">No evidence recorded for this case yet.</p>
+                    <p className="text-xs text-slate-500 mt-1">Upload a file to automatically trigger ingestion.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-950/70 text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="py-2.5 px-3">ID</th>
+                          <th className="py-2.5 px-3">File Name</th>
+                          <th className="py-2.5 px-3">Type</th>
+                          <th className="py-2.5 px-3">Pipeline</th>
+                          <th className="py-2.5 px-3">SHA-256 Hash</th>
+                          <th className="py-2.5 px-3 text-right">Chunks</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60">
+                        {evidenceList.map((ev) => (
+                          <tr key={ev.id} className="hover:bg-slate-800/40">
+                            <td className="py-3 px-3 font-mono font-bold text-indigo-400">
+                              E{ev.evidence_seq}
+                            </td>
+                            <td className="py-3 px-3 font-medium text-slate-200">
+                              {ev.file_name}
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                {(ev.file_size / 1024).toFixed(1)} KB
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-slate-400 font-mono text-[11px]">
+                              {ev.mime_type}
+                            </td>
+                            <td className="py-3 px-3">
+                              {ev.processing_status === "COMPLETED" && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-950/50 text-emerald-400 border border-emerald-500/30">
+                                  <CheckCircle2 className="w-3 h-3" /> Processed
+                                </span>
+                              )}
+                              {ev.processing_status === "PROCESSING" && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-blue-950/50 text-blue-400 border border-blue-500/30">
+                                  <RefreshCw className="w-3 h-3 animate-spin" /> Ingestion...
+                                </span>
+                              )}
+                              {ev.processing_status === "PENDING" && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-amber-950/50 text-amber-400 border border-amber-500/30">
+                                  <Clock className="w-3 h-3" /> Queued
+                                </span>
+                              )}
+                              {ev.processing_status === "FAILED" && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-950/50 text-red-400 border border-red-500/30">
+                                  <XCircle className="w-3 h-3" /> Failed
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-3">
+                              <button
+                                onClick={() => copyToClipboard(ev.sha256_hash)}
+                                className="flex items-center gap-1.5 font-mono text-[11px] bg-slate-950 hover:bg-slate-800 border border-slate-800 px-2 py-1 rounded text-slate-300 transition-colors"
+                                title="Click to copy SHA-256 hash"
+                              >
+                                <span>{ev.sha256_hash.substring(0, 12)}...</span>
+                                {copiedHash === ev.sha256_hash ? (
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3 h-3 text-slate-500" />
+                                )}
+                              </button>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <button
+                                onClick={() => handleViewChunks(ev)}
+                                className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 ml-auto transition-colors"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Inspect</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* TAB 2: Extracted Events View */}
+            {activeTab === "events" && (
+              <div className="space-y-4">
+                {extractionStatusText && (
+                  <div className="p-3.5 rounded-lg bg-indigo-950/60 border border-indigo-500/40 flex items-center gap-3 text-indigo-300 text-xs">
+                    <RefreshCw className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
+                    <span className="font-medium">{extractionStatusText}</span>
+                  </div>
+                )}
+
+                {filteredEvents.length === 0 ? (
+                  <div className="text-center py-12 border border-dashed border-slate-800 rounded-lg">
+                    <Sparkles className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                    <p className="text-sm text-slate-400">No events extracted yet.</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Click &quot;Extract Events with AI&quot; above to run the grounded forensic event extractor.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4">
+                    {filteredEvents.map((evt) => (
+                      <div
+                        key={evt.id}
+                        className="bg-slate-950/70 border border-slate-800 rounded-lg p-4 hover:border-slate-700 transition-colors space-y-3"
+                      >
+                        {/* Event Header */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            {evt.status === "verified" ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-500/30">
+                                <ShieldCheck className="w-3.5 h-3.5" />
+                                VERIFIED
+                              </span>
                             ) : (
-                              <Copy className="w-3 h-3 text-slate-500" />
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-500/30">
+                                <AlertCircle className="w-3.5 h-3.5" />
+                                NEEDS REVIEW
+                              </span>
                             )}
-                          </button>
-                        </td>
-                        <td className="py-3 px-3 text-right">
-                          <button
-                            onClick={() => handleViewChunks(ev)}
-                            className="bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 ml-auto transition-colors"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Inspect Chunks</span>
-                          </button>
-                        </td>
-                      </tr>
+                            {evt.chunk_id && (
+                              <span className="font-mono text-[10px] text-indigo-300 bg-indigo-950 px-2 py-0.5 rounded border border-indigo-800">
+                                {evt.chunk_id}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-400 flex items-center gap-1.5 font-mono">
+                            <Calendar className="w-3 h-3 text-slate-500" />
+                            <span>{evt.date}</span>
+                            {evt.date_iso && (
+                              <span className="text-[10px] text-indigo-400 bg-indigo-950/80 px-1.5 py-0.5 rounded border border-indigo-800/40">
+                                ISO: {new Date(evt.date_iso).toISOString().split("T")[0]}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Event Description */}
+                        <h4 className="text-sm font-semibold text-slate-100 leading-snug">
+                          {evt.event}
+                        </h4>
+
+                        {/* Actors Row */}
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                          <span className="inline-flex items-center gap-1 text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                            <User className="w-3 h-3 text-indigo-400" />
+                            <strong>Actor:</strong> {evt.who}
+                          </span>
+                          {evt.to_whom !== "unknown" && (
+                            <>
+                              <ArrowRight className="w-3 h-3 text-slate-600" />
+                              <span className="inline-flex items-center gap-1 text-slate-400 bg-slate-900 px-2 py-1 rounded border border-slate-800">
+                                <User className="w-3 h-3 text-emerald-400" />
+                                <strong>Target:</strong> {evt.to_whom}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Quote Box (Rule 4 Evidence Citation) */}
+                        <div className="bg-slate-900/80 border-l-2 border-indigo-500 rounded-r p-3 text-xs text-slate-300 font-mono italic flex items-start gap-2">
+                          <Quote className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
+                          <span>&quot;{evt.quote}&quot;</span>
+                        </div>
+
+                        {/* Verification Notes */}
+                        {evt.verification_notes && (
+                          <div className="text-[11px] text-slate-400 font-mono">
+                            <span className="text-slate-500">Audit Check:</span> {evt.verification_notes}
+                          </div>
+                        )}
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -634,7 +827,11 @@ export default function Dashboard() {
                           </span>
                         )}
                       </div>
-                      <div>{getConfidenceBadge(chunk.confidence)}</div>
+                      <div>
+                        <span className="px-2 py-0.5 rounded border text-[10px] font-mono font-medium text-emerald-400 bg-emerald-950/50 border-emerald-500/30">
+                          {chunk.confidence.toFixed(1)}% conf
+                        </span>
+                      </div>
                     </div>
                     <p className="text-xs text-slate-200 font-mono whitespace-pre-wrap leading-relaxed bg-slate-900/60 p-2.5 rounded border border-slate-800/60">
                       {chunk.text}
