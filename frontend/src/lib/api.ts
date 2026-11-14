@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
 export interface Case {
   id: string;
@@ -347,4 +347,274 @@ export async function fetchLlmHealth(token: string): Promise<LlmHealth> {
       detail: "Network connection error",
     };
   }
+}
+
+
+export interface EvidenceDuplicate {
+  id: string;
+  case_id: string;
+  duplicate_type: "exact_sha256" | "similar_image" | "similar_text";
+  primary_evidence_id?: string;
+  duplicate_evidence_id?: string;
+  primary_chunk_id?: string;
+  duplicate_chunk_id?: string;
+  similarity_score: number;
+  status: "pending" | "confirmed" | "dismissed";
+  created_at: string;
+  primary_file_name?: string;
+  duplicate_file_name?: string;
+  primary_text?: string;
+  duplicate_text?: string;
+}
+
+export interface DuplicateGroupResponse {
+  case_id: string;
+  total_duplicates: number;
+  pending_count: number;
+  confirmed_count: number;
+  dismissed_count: number;
+  items: EvidenceDuplicate[];
+}
+
+export interface CaseContradiction {
+  id: string;
+  case_id: string;
+  rule_type: "time_conflict" | "metadata_mismatch" | "spatial_impossibility";
+  event_a_id?: string;
+  event_b_id?: string;
+  chunk_a_id: string;
+  chunk_b_id: string;
+  quote_a: string;
+  quote_b: string;
+  explanation: string;
+  quotes_verified: boolean;
+  status: "flagged" | "resolved" | "dismissed";
+  created_at: string;
+}
+
+export interface ContradictionListResponse {
+  case_id: string;
+  total_contradictions: number;
+  flagged_count: number;
+  resolved_count: number;
+  dismissed_count: number;
+  items: CaseContradiction[];
+}
+
+export async function fetchDuplicates(token: string, caseId: string): Promise<DuplicateGroupResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/duplicates`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function reviewDuplicate(
+  token: string,
+  caseId: string,
+  dupId: string,
+  action: "confirm" | "dismiss"
+): Promise<EvidenceDuplicate> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/duplicates/${dupId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function detectDuplicates(token: string, caseId: string): Promise<EvidenceDuplicate[]> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/duplicates/detect`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchContradictions(token: string, caseId: string): Promise<ContradictionListResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/contradictions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function reviewContradiction(
+  token: string,
+  caseId: string,
+  contraId: string,
+  action: "resolve" | "dismiss"
+): Promise<CaseContradiction> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/contradictions/${contraId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ action }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function detectContradictions(token: string, caseId: string): Promise<CaseContradiction[]> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/contradictions/detect`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ----------------------------------------------------------------------------
+// MODULE 6: Share Links, Public Viewer, PDF Export, Demo & Tamper Simulation
+// ----------------------------------------------------------------------------
+
+export interface ShareLink {
+  id: string;
+  case_id: string;
+  token: string;
+  share_url: string;
+  expires_at: string;
+  is_revoked: boolean;
+  revoked_at?: string;
+  access_count: number;
+  last_accessed_at?: string;
+  created_at: string;
+}
+
+export interface PublicEvidenceItem {
+  id: string;
+  evidence_seq: number;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+  sha256_hash: string;
+  hash_verified: boolean;
+  created_at: string;
+}
+
+export interface PublicSharedCase {
+  case_id: string;
+  title: string;
+  description?: string;
+  token: string;
+  expires_at: string;
+  access_count: number;
+  integrity_status: "VERIFIED" | "COMPROMISED";
+  audit_chain_verified: boolean;
+  audit_blocks_count: number;
+  summary?: {
+    version: number;
+    content: string;
+    citations?: string[];
+    created_at: string;
+    is_outdated: boolean;
+  };
+  events: ForensicEvent[];
+  contradictions: CaseContradiction[];
+  evidence: PublicEvidenceItem[];
+}
+
+export async function createShareLink(
+  token: string,
+  caseId: string,
+  expiresInHours: number = 24
+): Promise<ShareLink> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/shares`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ expires_in_hours: expiresInHours }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchShareLinks(token: string, caseId: string): Promise<ShareLink[]> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/shares`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeShareLink(
+  token: string,
+  caseId: string,
+  shareId: string
+): Promise<ShareLink> {
+  const res = await fetch(`${API_BASE_URL}/api/cases/${caseId}/shares/${shareId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchPublicSharedCase(shareToken: string): Promise<PublicSharedCase> {
+  const res = await fetch(`${API_BASE_URL}/api/shared/${shareToken}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function fetchPublicCitation(shareToken: string, chunkId: string): Promise<Chunk> {
+  const res = await fetch(`${API_BASE_URL}/api/shared/${shareToken}/citation/${chunkId}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function loadDemoCase(token: string): Promise<{ case_id: string; title: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/load`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function simulateTamperFile(token: string, caseId: string, evidenceId?: string): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/tamper-file`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ case_id: caseId, evidence_id: evidenceId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function simulateTamperAudit(token: string, caseId: string): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/tamper-audit`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ case_id: caseId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function restoreDemoCase(token: string, caseId: string): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/restore`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ case_id: caseId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }

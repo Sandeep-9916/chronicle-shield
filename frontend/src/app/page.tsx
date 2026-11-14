@@ -34,6 +34,8 @@ import {
   Edit3,
   UserCheck,
   AlertTriangle,
+  Share2,
+  Download,
 } from "lucide-react";
 import {
   Case,
@@ -43,6 +45,7 @@ import {
   VerificationResult,
   LlmHealth,
   PipelineStatus,
+  API_BASE_URL,
   fetchCases,
   createCase,
   uploadEvidence,
@@ -56,10 +59,16 @@ import {
   triggerProcessEverything,
   fetchPipelineStatus,
   reviewEvent,
+  fetchContradictions,
+  CaseContradiction,
+  loadDemoCase,
 } from "@/lib/api";
 import CitationModal from "@/components/CitationModal";
 import EventReviewModal from "@/components/EventReviewModal";
 import SummaryView from "@/components/SummaryView";
+import DuplicatesView from "@/components/DuplicatesView";
+import ShareView from "@/components/ShareView";
+import TamperDemoModal from "@/components/TamperDemoModal";
 
 // Client-side only dynamic imports for vis-timeline and React Flow
 const TimelineView = dynamic(() => import("@/components/TimelineView"), {
@@ -88,7 +97,10 @@ export default function Dashboard() {
   const [selectedCaseId, setSelectedCaseId] = useState<string>("");
   const [evidenceList, setEvidenceList] = useState<Evidence[]>([]);
   const [eventsList, setEventsList] = useState<ForensicEvent[]>([]);
-  const [activeTab, setActiveTab] = useState<"evidence" | "events" | "timeline" | "graph" | "summary">("evidence");
+  const [contradictionsList, setContradictionsList] = useState<CaseContradiction[]>([]);
+  const [activeTab, setActiveTab] = useState<"evidence" | "events" | "timeline" | "graph" | "duplicates" | "summary" | "share">("evidence");
+  const [tamperModalOpen, setTamperModalOpen] = useState(false);
+  const [isLoadingDemo, setIsLoadingDemo] = useState(false);
 
   const [newTitle, setNewTitle] = useState("");
   const [newDesc, setNewDesc] = useState("");
@@ -150,10 +162,20 @@ export default function Dashboard() {
     if (token && selectedCaseId) {
       loadEvidence(selectedCaseId);
       loadEvents(selectedCaseId);
+      loadContradictions(selectedCaseId);
       setVerifyResult(null);
       setPipelineStatus(null);
     }
   }, [token, selectedCaseId]);
+
+  const loadContradictions = async (caseId: string) => {
+    try {
+      const res = await fetchContradictions(token, caseId);
+      setContradictionsList(res.items || []);
+    } catch {
+      setContradictionsList([]);
+    }
+  };
 
   // Polling for evidence processing status if any is pending
   useEffect(() => {
@@ -297,6 +319,7 @@ export default function Dashboard() {
             setIsProcessingAll(false);
             await loadEvents(selectedCaseId);
             await loadEvidence(selectedCaseId);
+            await loadContradictions(selectedCaseId);
           } else if (curStatus.status === "failed") {
             clearInterval(pollTimer);
             setIsProcessingAll(false);
@@ -310,6 +333,49 @@ export default function Dashboard() {
       setIsProcessingAll(false);
       setErrorMessage(err.message || "Failed to launch Process Everything pipeline.");
     }
+  };
+
+  const handleLoadDemoCase = async () => {
+    if (!token) {
+      setErrorMessage("Please enter your Supabase JWT Token first.");
+      return;
+    }
+    try {
+      setIsLoadingDemo(true);
+      setErrorMessage(null);
+      const res = await loadDemoCase(token);
+      await loadCases();
+      setSelectedCaseId(res.case_id);
+      setIsProcessingAll(true);
+      // Start polling status
+      const pollTimer = setInterval(async () => {
+        try {
+          const curStatus = await fetchPipelineStatus(token, res.case_id);
+          setPipelineStatus(curStatus);
+          if (curStatus.status === "completed") {
+            clearInterval(pollTimer);
+            setIsProcessingAll(false);
+            await loadEvents(res.case_id);
+            await loadEvidence(res.case_id);
+            await loadContradictions(res.case_id);
+          } else if (curStatus.status === "failed") {
+            clearInterval(pollTimer);
+            setIsProcessingAll(false);
+          }
+        } catch {
+          // ignore
+        }
+      }, 1500);
+    } catch (err: any) {
+      setErrorMessage(err.message || "Failed to load demo case.");
+    } finally {
+      setIsLoadingDemo(false);
+    }
+  };
+
+  const handleExportPDF = () => {
+    if (!selectedCaseId) return;
+    window.open(`${API_BASE_URL}/api/cases/${selectedCaseId}/export-pdf`, "_blank");
   };
 
   const handleOpenCitation = (chunkId: string, quote?: string) => {
@@ -385,6 +451,29 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
+      {/* Free Tier Notice & Load Demo Banner */}
+      <div className="mb-6 p-3.5 rounded-xl bg-slate-900 border border-indigo-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg">
+        <div className="flex items-center gap-2.5 text-xs text-slate-300">
+          <div className="p-1.5 rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <div>
+            <span className="font-semibold text-white">System Advisory:</span> Powered by AI free tier. Use synthetic/fake demo data only.
+            Evidence text is treated strictly as untrusted data with temperature 0 fact verification.
+          </div>
+        </div>
+
+        <button
+          onClick={handleLoadDemoCase}
+          disabled={isLoadingDemo || !token}
+          className="shrink-0 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white px-3.5 py-1.5 rounded-lg font-semibold text-xs flex items-center gap-2 shadow-md transition"
+          title="Generates a complete fake workplace harassment case with 1 planted duplicate and 1 planted contradiction"
+        >
+          {isLoadingDemo ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-amber-300" />}
+          <span>Load Demo Case (PS 3.2)</span>
+        </button>
+      </div>
+
       {/* Top Header */}
       <header className="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-slate-800 pb-6 mb-8 gap-4">
         <div>
@@ -395,8 +484,8 @@ export default function Dashboard() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
                 Chronicle Shield
-                <span className="text-xs bg-slate-800 text-slate-300 font-medium px-2 py-0.5 rounded border border-slate-700">
-                  Module 4: Full Forensic Suite
+                <span className="text-xs bg-slate-800 text-indigo-300 font-medium px-2 py-0.5 rounded border border-slate-700">
+                  Module 6: Full Forensic Suite
                 </span>
               </h1>
               <p className="text-sm text-slate-400">
@@ -611,6 +700,26 @@ export default function Dashboard() {
                   )}
                   Verify Vault
                 </button>
+
+                <button
+                  onClick={() => setTamperModalOpen(true)}
+                  disabled={!selectedCaseId}
+                  className="bg-amber-950/40 hover:bg-amber-900/60 disabled:bg-slate-900 text-amber-300 text-xs font-medium px-3 py-2.5 rounded-lg transition-colors flex items-center gap-1.5 border border-amber-800/40"
+                  title="Simulate evidence byte tampering or audit chain corruption to observe integrity checks"
+                >
+                  <AlertTriangle className="w-4 h-4 text-amber-400" />
+                  Tamper Lab
+                </button>
+
+                <button
+                  onClick={handleExportPDF}
+                  disabled={!selectedCaseId}
+                  className="bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 text-slate-200 text-xs font-medium px-3 py-2.5 rounded-lg transition-colors flex items-center gap-1.5 border border-slate-700"
+                  title="Export complete forensic investigation report to PDF"
+                >
+                  <Download className="w-4 h-4 text-indigo-400" />
+                  Export PDF
+                </button>
               </div>
             </div>
 
@@ -782,6 +891,18 @@ export default function Dashboard() {
                 </button>
 
                 <button
+                  onClick={() => setActiveTab("duplicates")}
+                  className={`flex items-center gap-1.5 pb-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+                    activeTab === "duplicates"
+                      ? "border-indigo-500 text-white"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Copy className="w-4 h-4 text-amber-400" />
+                  Duplicates
+                </button>
+
+                <button
                   onClick={() => setActiveTab("summary")}
                   className={`flex items-center gap-1.5 pb-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
                     activeTab === "summary"
@@ -791,6 +912,18 @@ export default function Dashboard() {
                 >
                   <FileText className="w-4 h-4 text-emerald-400" />
                   Summary
+                </button>
+
+                <button
+                  onClick={() => setActiveTab("share")}
+                  className={`flex items-center gap-1.5 pb-2 text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${
+                    activeTab === "share"
+                      ? "border-indigo-500 text-white"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Share2 className="w-4 h-4 text-cyan-400" />
+                  Share
                 </button>
               </div>
 
@@ -1083,7 +1216,11 @@ export default function Dashboard() {
 
             {/* TAB 3: Chronological vis-timeline Tab */}
             {activeTab === "timeline" && (
-              <TimelineView events={eventsList} onSelectCitation={handleOpenCitation} />
+              <TimelineView
+                events={eventsList}
+                contradictions={contradictionsList}
+                onSelectCitation={handleOpenCitation}
+              />
             )}
 
             {/* TAB 4: Entity & Evidence React Flow Graph Tab */}
@@ -1091,13 +1228,27 @@ export default function Dashboard() {
               <GraphView events={eventsList} onSelectCitation={handleOpenCitation} />
             )}
 
-            {/* TAB 5: Verifiable Cited Summary Tab */}
+            {/* TAB 5: Duplicates Resolution Tab */}
+            {activeTab === "duplicates" && (
+              <DuplicatesView
+                caseId={selectedCaseId}
+                token={token}
+                onSelectCitation={handleOpenCitation}
+              />
+            )}
+
+            {/* TAB 6: Verifiable Cited Summary Tab */}
             {activeTab === "summary" && (
               <SummaryView
                 caseId={selectedCaseId}
                 token={token}
                 onSelectCitation={handleOpenCitation}
               />
+            )}
+
+            {/* TAB 7: Tamper-Evident Share Links Tab */}
+            {activeTab === "share" && (
+              <ShareView caseId={selectedCaseId} token={token} />
             )}
           </div>
         </div>
@@ -1234,6 +1385,16 @@ export default function Dashboard() {
         token={token}
         onEventUpdated={handleEventUpdated}
       />
+
+      {/* Interactive Tamper & Integrity Demo Modal */}
+      {tamperModalOpen && (
+        <TamperDemoModal
+          caseId={selectedCaseId}
+          token={token}
+          onClose={() => setTamperModalOpen(false)}
+          onVerifyCompleted={(res) => setVerifyResult(res)}
+        />
+      )}
     </div>
   );
 }

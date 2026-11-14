@@ -284,3 +284,99 @@ CREATE POLICY "Users can read evidence objects"
         bucket_id = 'evidence'
         AND (auth.uid()::text = (storage.foldername(name))[1])
     );
+
+
+-- ------------------------------------------------------------------------------
+-- 9. Evidence Duplicates Table (Module 5)
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS evidence_duplicates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    duplicate_type VARCHAR(50) NOT NULL, -- exact_sha256, similar_image, similar_text
+    primary_evidence_id UUID REFERENCES evidence(id) ON DELETE CASCADE,
+    duplicate_evidence_id UUID REFERENCES evidence(id) ON DELETE CASCADE,
+    primary_chunk_id VARCHAR(100),
+    duplicate_chunk_id VARCHAR(100),
+    similarity_score FLOAT NOT NULL DEFAULT 1.0,
+    status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, confirmed, dismissed
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_duplicates_case_id ON evidence_duplicates(case_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_duplicates_status ON evidence_duplicates(status);
+
+ALTER TABLE evidence_duplicates ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view duplicates for their own cases"
+    ON evidence_duplicates FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM cases
+            WHERE cases.id = evidence_duplicates.case_id AND cases.user_id = auth.uid()
+        )
+    );
+
+
+-- ------------------------------------------------------------------------------
+-- 10. Case Contradictions Table (Module 5)
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS case_contradictions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    rule_type VARCHAR(50) NOT NULL, -- time_conflict, metadata_mismatch, spatial_impossibility
+    event_a_id UUID REFERENCES events(id) ON DELETE SET NULL,
+    event_b_id UUID REFERENCES events(id) ON DELETE SET NULL,
+    chunk_a_id VARCHAR(100) NOT NULL,
+    chunk_b_id VARCHAR(100) NOT NULL,
+    quote_a TEXT NOT NULL,
+    quote_b TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    quotes_verified BOOLEAN NOT NULL DEFAULT TRUE,
+    status VARCHAR(50) NOT NULL DEFAULT 'flagged', -- flagged, resolved, dismissed
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_contradictions_case_id ON case_contradictions(case_id);
+CREATE INDEX IF NOT EXISTS idx_case_contradictions_status ON case_contradictions(status);
+
+ALTER TABLE case_contradictions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view contradictions for their own cases"
+    ON case_contradictions FOR SELECT
+    USING (
+        EXISTS (
+            SELECT 1 FROM cases
+            WHERE cases.id = case_contradictions.case_id AND cases.user_id = auth.uid()
+        )
+    );
+
+
+-- ------------------------------------------------------------------------------
+-- 11. Share Links Table (Module 6)
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS share_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    token VARCHAR(128) UNIQUE NOT NULL,
+    created_by UUID NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    revoked_at TIMESTAMPTZ,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token);
+CREATE INDEX IF NOT EXISTS idx_share_links_case_id ON share_links(case_id);
+
+ALTER TABLE share_links ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can manage share links for their own cases"
+    ON share_links FOR ALL
+    USING (
+        EXISTS (
+            SELECT 1 FROM cases
+            WHERE cases.id = share_links.case_id AND cases.user_id = auth.uid()
+        )
+    );

@@ -1,3 +1,4 @@
+from typing import Any
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
@@ -69,6 +70,52 @@ def log_action(
     return entry
 
 
+def verify_audit_entries(
+    entries: list[Any],
+) -> tuple[bool, int, int | None, str | None]:
+    """
+    Verifies cryptographic hash chain continuity over any list of audit log objects or dicts.
+    Returns: (is_valid: bool, total_checked: int, broken_seq: Optional[int], fail_reason: Optional[str])
+    """
+    expected_seq = 1
+    expected_prev_hash = GENESIS_HASH
+
+    for entry in entries:
+        seq = entry.seq if hasattr(entry, "seq") else entry["seq"]
+        prev_hash = entry.previous_hash if hasattr(entry, "previous_hash") else entry["previous_hash"]
+        curr_hash = entry.current_hash if hasattr(entry, "current_hash") else entry["current_hash"]
+        case_id = entry.case_id if hasattr(entry, "case_id") else entry["case_id"]
+        user_id = entry.user_id if hasattr(entry, "user_id") else entry.get("user_id")
+        action = entry.action if hasattr(entry, "action") else entry["action"]
+        evidence_id = entry.evidence_id if hasattr(entry, "evidence_id") else entry.get("evidence_id")
+        created_at = entry.created_at if hasattr(entry, "created_at") else entry["created_at"]
+
+        if seq != expected_seq:
+            return False, len(entries), seq, f"Audit log sequence break: expected seq {expected_seq}, found {seq}"
+
+        if prev_hash != expected_prev_hash:
+            return False, len(entries), seq, f"Audit log previous_hash mismatch at seq {seq}"
+
+        timestamp_iso = format_canonical_timestamp(created_at)
+        recalculated_hash = compute_canonical_hash(
+            seq=seq,
+            case_id=case_id,
+            user_id=user_id,
+            action=action,
+            evidence_id=evidence_id,
+            timestamp_iso=timestamp_iso,
+            previous_hash=prev_hash,
+        )
+
+        if recalculated_hash != curr_hash:
+            return False, len(entries), seq, f"Audit log hash mismatch at seq {seq}. Payload was modified."
+
+        expected_prev_hash = curr_hash
+        expected_seq += 1
+
+    return True, len(entries), None, None
+
+
 def verify_case_chain(case_id: str, db: Session) -> tuple[bool, int, str | None]:
     """
     Verifies cryptographic hash chain continuity for a case.
@@ -80,33 +127,6 @@ def verify_case_chain(case_id: str, db: Session) -> tuple[bool, int, str | None]
         .order_by(AuditLog.seq.asc())
         .all()
     )
-
-    expected_seq = 1
-    expected_prev_hash = GENESIS_HASH
-
-    for entry in audit_logs:
-        if entry.seq != expected_seq:
-            return False, len(audit_logs), f"Audit sequence break: expected {expected_seq}, found {entry.seq}"
-
-        if entry.previous_hash != expected_prev_hash:
-            return False, len(audit_logs), f"Audit previous_hash mismatch at seq {entry.seq}"
-
-        timestamp_iso = format_canonical_timestamp(entry.created_at)
-        recalculated_hash = compute_canonical_hash(
-            seq=entry.seq,
-            case_id=entry.case_id,
-            user_id=entry.user_id,
-            action=entry.action,
-            evidence_id=entry.evidence_id,
-            timestamp_iso=timestamp_iso,
-            previous_hash=entry.previous_hash,
-        )
-
-        if recalculated_hash != entry.current_hash:
-            return False, len(audit_logs), f"Audit hash corrupted at seq {entry.seq}"
-
-        expected_prev_hash = entry.current_hash
-        expected_seq += 1
-
-    return True, len(audit_logs), None
+    is_valid, total, broken_seq, reason = verify_audit_entries(audit_logs)
+    return is_valid, total, reason
 

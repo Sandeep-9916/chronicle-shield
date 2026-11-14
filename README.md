@@ -139,3 +139,39 @@ The 17 automated tests verify:
    - Real-time background task progress indicator and spinner.
    - Filters by status: `All`, `Verified`, `Needs Review`.
    - Displays status pills, quoted source text, actors (`who` -> `to_whom`), original date, ISO-8601 date, and source chunk references.
+
+---
+
+### Module 5: Deduplication & Contradiction Intelligence
+1. **Duplicate Detection Engine**:
+   - Exact file duplicates matching server-side SHA-256 hashes (`similarity_score: 1.0`).
+   - Perceptual image similarity using `imagehash.phash` on raw image bytes from storage.
+   - Semantic text chunk similarity using `sentence-transformers` (`all-MiniLM-L6-v2`) with cosine similarity and n-gram fallback.
+   - Dedicated Duplicates tab allowing investigators to confirm or dismiss flagged duplicate groups.
+2. **Contradiction Detection Engine**:
+   - Deterministic code rules: `TIME_CONFLICT`, `METADATA_MISMATCH`, and `SPATIAL_IMPOSSIBILITY` (same person in two disparate locations within $\le 4$ hours).
+   - Grounded single-sentence LLM explanations citing both sources.
+   - Strict quote verification against source chunks (Rule 4) before persisting any contradiction.
+   - Visual surfacing in vis-timeline and cited summary with clickable source links.
+
+---
+
+### Module 6: Share Links, Public Viewer, PDF Export & Tamper Lab
+1. **Cryptographic Share Links**:
+   - Signed, expiring, revocable, read-only share links scoped to a single case.
+   - Rate-limited (60 requests/min per IP/token) to prevent scraping.
+   - Every access is cryptographically logged in the case's hash-chained audit log (`VIEW_SHARED_CASE`).
+   - Dedicated Share tab in the dashboard for link creation, duration configuration, and instant revocation.
+2. **Public Share Viewer (`/share/[token]`)**:
+   - Standalone unauthenticated viewer page with a prominent **Hash-Verified Integrity Badge**.
+   - Inspects cited summary, chronological timeline, flagged contradictions, and complete evidence SHA-256 ledger.
+   - Re-checks evidence SHA-256 hashes against storage bytes directly upon access.
+3. **Forensic PDF Export**:
+   - Generates tamper-evident multi-page forensic reports via PyMuPDF (`fitz`).
+   - Includes case metadata, cited summary, timeline, flagged contradictions, and SHA-256 hash ledger.
+4. **Interactive "Load Demo Case" (PS 3.2)**:
+   - 1-click button creating a complete fake workplace harassment case (chat export, screenshots, audio note, alibi PDF) with 1 planted duplicate and 1 planted contradiction, and triggers the 5-stage Process Everything pipeline.
+5. **Interactive Tamper Demo Lab**:
+   - Step-by-step interactive testbed demonstrating how file byte corruption and database audit log tampering are immediately exposed by cryptographic hash checks.
+6. **Gemini Tier Notice**:
+   - Prominently advises users in both the UI and documentation that the free Gemini tier is designed strictly for synthetic/fake demo data.

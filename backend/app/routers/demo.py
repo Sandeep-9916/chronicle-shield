@@ -99,40 +99,65 @@ def simulate_audit_tamper(
     db: Session = Depends(get_db),
 ):
     """
-    Simulates tampering with the audit log hash chain by directly modifying
-    a previous_hash value in SQLite / Postgres test tables.
+    Simulates tampering with the audit log hash chain on an in-memory copy of the chain.
+    Never modifies the real audit_log table in database, preserving PostgreSQL trigger
+    immutability protections (Rule 3).
     """
     case = db.query(Case).filter(Case.id == req.case_id, Case.user_id == current_user.id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
-    audit_entry = (
+    audit_entries = (
         db.query(AuditLog)
-        .filter(AuditLog.case_id == case.id, AuditLog.seq > 1)
+        .filter(AuditLog.case_id == case.id)
         .order_by(AuditLog.seq.asc())
-        .first()
+        .all()
     )
-    if not audit_entry:
-        audit_entry = db.query(AuditLog).filter(AuditLog.case_id == case.id).first()
+    if not audit_entries:
+        raise HTTPException(status_code=404, detail="No audit log entries found to simulate tampering")
 
-    if not audit_entry:
-        raise HTTPException(status_code=404, detail="No audit log entries found to tamper with")
+    # Clone entries to in-memory representation
+    chain_copy = [
+        {
+            "id": e.id,
+            "seq": e.seq,
+            "case_id": e.case_id,
+            "user_id": e.user_id,
+            "action": e.action,
+            "evidence_id": e.evidence_id,
+            "previous_hash": e.previous_hash,
+            "current_hash": e.current_hash,
+            "created_at": e.created_at,
+        }
+        for e in audit_entries
+    ]
 
-    # Tamper the entry's action and previous_hash
+    # Select entry to alter (entry #2 if available, else entry #1)
+    target_idx = 1 if len(chain_copy) > 1 else 0
+    target_seq = chain_copy[target_idx]["seq"]
+    original_prev_hash = chain_copy[target_idx]["previous_hash"]
     corrupted_hash = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-    # Execute raw update to bypass model protections if needed
-    db.execute(
-        text("UPDATE audit_log SET previous_hash = :p_hash WHERE id = :log_id"),
-        {"p_hash": corrupted_hash, "log_id": audit_entry.id},
-    )
-    db.commit()
+
+    # Corrupt in-memory previous_hash
+    chain_copy[target_idx]["previous_hash"] = corrupted_hash
+
+    # Run cryptographic verifier on this altered in-memory chain
+    from backend.app.services.audit import verify_audit_entries
+    chain_valid, total_checked, broken_seq, fail_reason = verify_audit_entries(chain_copy)
 
     return {
         "status": "tampered",
-        "message": f"Successfully broke audit hash chain at sequence #{audit_entry.seq}.",
-        "corrupted_block_seq": audit_entry.seq,
+        "simulation": True,
+        "chain_valid": chain_valid,
+        "broken_audit_entry_seq": broken_seq,
+        "corrupted_block_seq": target_seq,
+        "expected_hash": original_prev_hash,
         "corrupted_hash": corrupted_hash,
-        "instruction": "Click 'Verify Integrity' to observe the hash chain cryptographic break detected at sequence #{audit_entry.seq}.",
+        "total_logs_checked": total_checked,
+        "reason": fail_reason,
+        "message": f"Simulated audit chain tampering on in-memory chain. Verifier successfully flagged broken block seq #{broken_seq}.",
+        "db_immutable": True,
+        "db_protection_note": "Real database table audit_log was not modified, respecting PostgreSQL UPDATE/DELETE trigger.",
     }
 
 
