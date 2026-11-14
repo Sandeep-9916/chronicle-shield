@@ -5,6 +5,7 @@ from backend.app.models.event import Event
 from backend.app.models.summary import CaseSummary
 from backend.app.models.duplicate import EvidenceDuplicate
 from backend.app.models.contradiction import CaseContradiction
+from backend.app.models.share_link import ShareLink
 from backend.app.models.llm_cache import LLMCache
 from backend.app.models.audit_log import AuditLog, compute_canonical_hash, format_canonical_timestamp
 
@@ -16,6 +17,7 @@ __all__ = [
     "CaseSummary",
     "EvidenceDuplicate",
     "CaseContradiction",
+    "ShareLink",
     "LLMCache",
     "AuditLog",
     "compute_canonical_hash",

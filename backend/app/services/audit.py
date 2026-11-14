@@ -67,3 +67,46 @@ def log_action(
     db.commit()
     db.refresh(entry)
     return entry
+
+
+def verify_case_chain(case_id: str, db: Session) -> tuple[bool, int, str | None]:
+    """
+    Verifies cryptographic hash chain continuity for a case.
+    Returns: (is_valid, blocks_count, fail_reason)
+    """
+    audit_logs = (
+        db.query(AuditLog)
+        .filter(AuditLog.case_id == case_id)
+        .order_by(AuditLog.seq.asc())
+        .all()
+    )
+
+    expected_seq = 1
+    expected_prev_hash = GENESIS_HASH
+
+    for entry in audit_logs:
+        if entry.seq != expected_seq:
+            return False, len(audit_logs), f"Audit sequence break: expected {expected_seq}, found {entry.seq}"
+
+        if entry.previous_hash != expected_prev_hash:
+            return False, len(audit_logs), f"Audit previous_hash mismatch at seq {entry.seq}"
+
+        timestamp_iso = format_canonical_timestamp(entry.created_at)
+        recalculated_hash = compute_canonical_hash(
+            seq=entry.seq,
+            case_id=entry.case_id,
+            user_id=entry.user_id,
+            action=entry.action,
+            evidence_id=entry.evidence_id,
+            timestamp_iso=timestamp_iso,
+            previous_hash=entry.previous_hash,
+        )
+
+        if recalculated_hash != entry.current_hash:
+            return False, len(audit_logs), f"Audit hash corrupted at seq {entry.seq}"
+
+        expected_prev_hash = entry.current_hash
+        expected_seq += 1
+
+    return True, len(audit_logs), None
+

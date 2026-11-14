@@ -12,6 +12,8 @@ from backend.app.routers import (
     process_all,
     duplicates,
     contradictions,
+    shares,
+    demo,
 )
 
 # Ensure database tables exist
@@ -41,6 +43,8 @@ app.include_router(summary.router)
 app.include_router(process_all.router)
 app.include_router(duplicates.router)
 app.include_router(contradictions.router)
+app.include_router(shares.router)
+app.include_router(demo.router)
 app.include_router(llm_health.router)
 
 
